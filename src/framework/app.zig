@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const debug = @import("debug.zig");
 const images = @import("images.zig");
@@ -35,9 +36,11 @@ pub fn start(config: AppConfig) !void {
     try app_backend.init();
     defer app_backend.deinit();
 
-    // Change the working dir to where the assets are
-    debug.log("Assets Path: {s}", .{assets_path});
-    try std.os.chdir(assets_path[0..assets_path.len]);
+    if (builtin.target.os.tag != .emscripten) {
+        // Change the working dir to where the assets are
+        debug.log("Assets Path: {s}", .{assets_path});
+        try std.os.chdir(assets_path[0..assets_path.len]);
+    }
 
     // Kick off the game loop! This will also start and stop the subsystems.
     app_backend.startMainLoop(config);
