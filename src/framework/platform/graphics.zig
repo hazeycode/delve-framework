@@ -623,7 +623,8 @@ pub const MaterialUniformBlock = struct {
         }
 
         // harder case, just add them one by one
-        for (0..num) |i| {
+        const _num: usize = @as(usize, @intCast(num));
+        for (0.._num) |i| {
             _ = i;
             const padv: u8 = 0;
             self.bytes.appendSlice(std.mem.asBytes(&padv)) catch {

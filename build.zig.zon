@@ -18,6 +18,10 @@
             .url = "git+https://github.com/floooh/sokol-zig.git#e0df69dc8ca17053bfa48ecec46dde02acb4395b",
             .hash = "122070b288a2a945ad54ffef1c3809f67c136e9813d294ffea209abf7f3171a4b8e6",
         },
+        .emsdk = .{
+            .url = "git+https://github.com/emscripten-core/emsdk#0bbae74935d57ff41739648c12cf90b56668398f",
+            .hash = "1220f1340cd871b444021c600661f921f96091ce0815fa43008528f4844cece7e245",
+        },
         .zstbi = .{
             .path = "3rdparty/zstbi",
         },

@@ -5,10 +5,11 @@ const zaudio = @import("zaudio");
 const zmesh = @import("zmesh");
 const ziglua = @import("ziglua");
 const zstbi = @import("zstbi");
-const system_sdk = @import("system-sdk");
+const system_sdk = @import("system_sdk");
 
 var target: Build.ResolvedTarget = undefined;
 var optimize: std.builtin.OptimizeMode = undefined;
+var dep_sokol: *Build.Dependency = undefined;
 
 const String = []const u8;
 const ModuleImport = struct {
@@ -22,27 +23,31 @@ const BuildCollection = struct {
 const ExampleItem = []const String;
 
 // zig build -freference-trace run-forest
+// zig build -Dtarget=wasm32-emscripten -freference-trace run-forest
 
 pub fn build(b: *std.Build) !void {
     target = b.standardTargetOptions(.{});
     optimize = b.standardOptimizeOption(.{});
 
-    const dep_sokol = b.dependency("sokol", .{
+    dep_sokol = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
     });
 
-    const ziglua_mod = b.dependency("ziglua", .{
+    const ziglua_dep = b.dependency("ziglua", .{
         .target = target,
         .optimize = optimize,
-    }).module("ziglua");
+    });
+    const ziglua_mod = ziglua_dep.module("ziglua");
+    const ziglua_item = .{ .module = ziglua_mod, .name = "ziglua" };
+    const ziglua_artifact = ziglua_dep.artifact("lua"); // added to staticLibrary array
+    ziglua_artifact.linkLibC();
 
     const zmesh_pkg = zmesh.package(b, target, optimize, .{});
     const zstbi_pkg = zstbi.package(b, target, optimize, .{});
     const zaudio_pkg = zaudio.package(b, target, optimize, .{});
 
     const sokol_item = .{ .module = dep_sokol.module("sokol"), .name = "sokol" };
-    const ziglua_item = .{ .module = ziglua_mod, .name = "ziglua" };
     const zmesh_item = .{ .module = zmesh_pkg.zmesh, .name = "zmesh" };
     const zmesh_options_item = .{ .module = zmesh_pkg.zmesh_options, .name = "zmesh_options" };
     const zstbi_item = .{ .module = zstbi_pkg.zstbi, .name = "zstbi" };
@@ -56,6 +61,7 @@ pub fn build(b: *std.Build) !void {
         zaudio_item,
     };
     const link_libraries = [_]*Build.Step.Compile{
+        ziglua_artifact,
         zmesh_pkg.zmesh_c_cpp,
         zstbi_pkg.zstbi_c_cpp,
         zaudio_pkg.zaudio_c_cpp,
@@ -76,7 +82,9 @@ pub fn build(b: *std.Build) !void {
     for (build_collection.add_imports) |build_import| {
         delve_mod.addImport(build_import.name, build_import.module);
     }
+    //const emsdk_sysroot_include = b.dependency("emsdk", .{}).path("upstream/emscripten/cache/sysroot/include").getPath(b);
     for (build_collection.link_libraries) |lib| {
+        //lib.addIncludePath(.{ .path = emsdk_sysroot_include });
         delve_mod.linkLibrary(lib);
     }
 
@@ -133,6 +141,7 @@ fn buildExample(b: *std.Build, example: ExampleItem, build_collection: BuildColl
     var app: *Build.Step.Compile = undefined;
     // special case handling for native vs web build
     if (target.result.isWasm()) {
+        // Web
         app = b.addStaticLibrary(.{
             .target = target,
             .optimize = optimize,
@@ -140,6 +149,7 @@ fn buildExample(b: *std.Build, example: ExampleItem, build_collection: BuildColl
             .root_source_file = .{ .path = root_source_file },
         });
     } else {
+        // Native
         app = b.addExecutable(.{
             .target = target,
             .optimize = optimize,
@@ -148,35 +158,56 @@ fn buildExample(b: *std.Build, example: ExampleItem, build_collection: BuildColl
         });
     }
 
-    for (build_collection.add_imports) |build_import| {
-        app.root_module.addImport(build_import.name, build_import.module);
+    // Modules linked to app
+    for (build_collection.add_imports) |mod| {
+        app.root_module.addImport(mod.name, mod.module);
     }
+
+    // Static libs linked to app
     for (build_collection.link_libraries) |lib| {
-        app.linkLibrary(lib);
+        app.root_module.linkLibrary(lib);
     }
 
     if (target.result.isWasm()) {
         // create a build step which invokes the Emscripten linker
-        // const emsdk = dep_sokol.builder.dependency("emsdk", .{});
-        // const link_step = try sokol.emLinkStep(b, .{
-        //     .lib_main = app,
-        //     .target = target,
-        //     .optimize = optimize,
-        //     .emsdk = emsdk,
-        //     .use_webgl2 = true,
-        //     .use_emmalloc = true,
-        //     .use_filesystem = false,
-        //     .shell_file_path = dep_sokol.path("3rdparty/sokol-zig/web/shell.html").getPath(b),
-        // });
-        // // ...and a special run step to start the web build output via 'emrun'
-        // const run = sokol.emRunStep(b, .{ .name = example[0], .emsdk = emsdk });
-        // run.step.dependOn(&link_step.step);
+        const emsdk = dep_sokol.builder.dependency("emsdk", .{});
+        const emcc_run: *Build.Step.Run = try sokol.emLinkStep(b, .{
+            .lib_main = app,
+            .target = target,
+            .optimize = optimize,
+            .emsdk = emsdk,
+            .use_webgl2 = true,
+            .use_emmalloc = true,
+            .use_filesystem = false,
+            .shell_file_path = dep_sokol.path(thisDir() ++ "/3rdparty/sokol_web/shell.html").getPath(b),
+        });
 
-        // var option_buffer = [_]u8{undefined} ** 100;
-        // const run_name = try std.fmt.bufPrint(&option_buffer, "run-{s}", .{name});
-        // var description_buffer = [_]u8{undefined} ** 200;
-        // const descr_name = try std.fmt.bufPrint(&description_buffer, "run {s}", .{name});
-        // b.step(run_name, descr_name).dependOn(&run.step);
+        for (build_collection.add_imports) |mod| {
+            const comp: *Build.Step.Compile = b.addStaticLibrary(.{
+                .optimize = optimize,
+                .target = target,
+                .name = mod.name,
+                .root_source_file = mod.module.root_source_file,
+            });
+            comp.linkLibC(); // + This?
+            emcc_run.addArtifactArg(comp);
+        }
+
+        const emsdk_sysroot_include = b.dependency("emsdk", .{}).path("upstream/emscripten/cache/sysroot/include").getPath(b);
+        for (build_collection.link_libraries) |lib| {
+            lib.addIncludePath(.{ .path = emsdk_sysroot_include });
+            emcc_run.addArtifactArg(lib);
+        }
+
+        // ...and a special run step to start the web build output via 'emrun'
+        const run: *Build.Step.Run = sokol.emRunStep(b, .{ .name = name, .emsdk = emsdk });
+        run.step.dependOn(&emcc_run.step);
+
+        var option_buffer = [_]u8{undefined} ** 100;
+        const run_name = try std.fmt.bufPrint(&option_buffer, "run-{s}", .{name});
+        var description_buffer = [_]u8{undefined} ** 200;
+        const descr_name = try std.fmt.bufPrint(&description_buffer, "run {s}", .{name});
+        b.step(run_name, descr_name).dependOn(&run.step);
     } else {
         b.installArtifact(app);
         const run = b.addRunArtifact(app);
@@ -187,4 +218,8 @@ fn buildExample(b: *std.Build, example: ExampleItem, build_collection: BuildColl
 
         b.step(run_name, descr_name).dependOn(&run.step);
     }
+}
+
+inline fn thisDir() []const u8 {
+    return comptime std.fs.path.dirname(@src().file) orelse ".";
 }
